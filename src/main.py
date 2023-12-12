@@ -76,13 +76,15 @@ app = FastAPI()
 
 # Fetch sensitive information from environment variables
 # key_json_content = os.getenv('KEY_CONFIG')
-bucket_name = os.getenv('BUCKET_NAME')
+#bucket_name = os.getenv('BUCKET_NAME')
+bucket_name = ""
 
 # Convert the environment variable containing JSON to a Python dictionary
 #key_info = json.loads(key_json_content)
 
 # Use the fetched values
-client = storage.Client.from_service_account_json("./key.json")
+KEY = {}
+client = storage.Client.from_service_account_info(KEY)
 
 def get_category(file_extension: str):
     music_extensions = ['mp3', 'wav', 'ogg']

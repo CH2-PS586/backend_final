@@ -5,15 +5,15 @@ from datetime import datetime
 from .database import Base
 
 
-# class User(Base):
-#     __tablename__ = "users"
+class Users(Base):
+    __tablename__ = "users"
 
-#     id = Column(Integer, primary_key=True, index=True)
-#     email = Column(String(255), unique=True, index=True)
-#     username = Column(String(300),unique=True)
-#     hashed_password = Column(String(255))
+    id = Column(Integer, primary_key=True, index=True)
+    username = Column(String(300),unique=True)
+    email = Column(String(255), unique=True, index=True)
+    hashed_password = Column(String(255))
 
-#     File = relationship("Item", back_populates="owner")
+    files = relationship("File", back_populates="owner")
 
 
 class File(Base):
@@ -28,5 +28,5 @@ class File(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     gcp_bucket_url = Column(String(255))
 
-    # owner_id = Column(Integer, ForeignKey("users.id"))
-    # owner = relationship("User", back_populates="files")
+    owner_id = Column(Integer, ForeignKey("users.id"))
+    owner = relationship("Users", back_populates="files")

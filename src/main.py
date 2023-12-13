@@ -21,8 +21,15 @@ from .schemas import FileCreate
 from sqlalchemy.orm import Session
 from fastapi.encoders import jsonable_encoder
 
+# File Download
 from starlette.responses import StreamingResponse
 import io
+
+# OAuth2
+from typing import Annotated
+from . import oauth
+from .oauth import get_current_user
+from fastapi import status
 
 models.Base.metadata.create_all(bind=engine)
 
@@ -74,6 +81,8 @@ load_dotenv()
 
 app = FastAPI()
 
+app.include_router(oauth.router)
+
 # Fetch sensitive information from environment variables
 # key_json_content = os.getenv('KEY_CONFIG')
 #bucket_name = os.getenv('BUCKET_NAME')
@@ -84,6 +93,7 @@ bucket_name = ""
 
 # Use the fetched values
 KEY = {}
+
 client = storage.Client.from_service_account_info(KEY)
 
 def get_category(file_extension: str):
@@ -103,11 +113,11 @@ def get_category(file_extension: str):
     else:
         return 'others'
 
-def upload_file_to_gcs(file: UploadFile, category: str, label: str):
+def upload_file_to_gcs(file: UploadFile, category: str, label: str, user: str):
     if label is not None:
-        blob_name = f"{category}/{label}/{file.filename}"
+        blob_name = f"{user}/{category}/{label}/{file.filename}"
     else:
-        blob_name = f"{category}/{file.filename}"
+        blob_name = f"{user}/{category}/{file.filename}"
 
     blob = client.bucket(bucket_name).blob(blob_name)
 
@@ -119,14 +129,18 @@ def upload_file_to_gcs(file: UploadFile, category: str, label: str):
     gcs_url = f"gs://{bucket_name}/{blob_name}"
     return {"message": f"File uploaded successfully to {category} category and {label} label" if label else f"File uploaded successfully to {category} category", "gcs_url": gcs_url}
 
-def save_file_to_database(db: Session, filename: str, file_size: int, category: str, label: str = None, gcs_url: str = None):
+def save_file_to_database(db: Session, filename: str, file_size: int, category: str,user_id: int, label: str = None, gcs_url: str = None):
     file_data = FileCreate(
         filename=filename,
         file_size=file_size,
         category=category,
         label=label,
-        gcp_bucket_url=gcs_url
+        gcp_bucket_url=str(gcs_url),
+        owner_id = user_id
     )
+    # if owner_id is not None:
+    #     file_data.owner_id = owner_id
+        
     db_file = FileModel(**file_data.dict())  # Replace 1 with the actual user ID
     db.add(db_file)
     db.commit()
@@ -138,9 +152,21 @@ def convert_bytes_to_human_readable(size_in_bytes):
         if size_in_bytes < 1024.0:
             return f"{size_in_bytes:.2f} {unit}"
         size_in_bytes /= 1024.0
+        
+db_dependency = Annotated[Session, Depends(get_db)]	
+user_dependency = Annotated[dict, Depends(get_current_user)]
+
+@app.get("/check", status_code=status.HTTP_200_OK)
+async def verify_status(user:user_dependency, db: db_dependency):
+	if user is None:
+		raise HTTPException(status_code=401, detail='Authentication Failed')
+	return {"User": user}
 
 @app.post("/files")
-async def upload(files: list[UploadFile] = File(...), db: Session = Depends(get_db)):
+async def upload(user: user_dependency, files: list[UploadFile] = File(...), db: Session = Depends(get_db)):
+    if user is None:
+        raise HTTPException(status_code=401, detail='Authentication Failed')
+
     messages = []
     for file in files:
         file_extension = file.filename.split('.')[-1]
@@ -154,11 +180,11 @@ async def upload(files: list[UploadFile] = File(...), db: Session = Depends(get_
             label = str(label_array[np.argmax(prediction)])
 
         # Upload the file to GCS
-        upload_result = upload_file_to_gcs(file, category, label)
+        upload_result = upload_file_to_gcs(file, category, label, user['username'])
         gcs_url = upload_result.get("gcs_url", "")
 
         # Save file information to the database including the GCS URL
-        db_file = save_file_to_database(db, file.filename, file.file._file.tell(), category, label, gcs_url)
+        db_file = save_file_to_database(db, file.filename, file.file._file.tell(), category, user['id'], label, gcs_url)
         
         messages.append({"upload_message": upload_result["message"],
                          "category": category,
@@ -173,8 +199,10 @@ ML_CATEGORIES = {"picture", "document"}
 ALLOWED_LABELS = ['Collage', 'Food', 'Friends', 'Memes', 'Pets', 'Selfie', 'Personal', 'Work or School']
 
 @app.get("/files/{category}")
-async def get_files_by_category(category: str = Path(..., title="Category")):
+async def get_files_by_category(user: user_dependency, category: str = Path(..., title="Category")):
     try:
+        if user is None:
+            raise HTTPException(status_code=401, detail='Authentication Failed')
         # Check if the specified category is allowed
         if category.lower() not in ALLOWED_CATEGORIES:
             raise HTTPException(status_code=400, detail="Invalid category")
@@ -184,7 +212,7 @@ async def get_files_by_category(category: str = Path(..., title="Category")):
         #     return {"allowed_labels": ALLOWED_LABELS}
 
         # List files in the specified category from the cloud storage bucket
-        blobs = client.bucket(bucket_name).list_blobs(prefix=f"{category.lower()}/")
+        blobs = client.bucket(bucket_name).list_blobs(prefix=f"{user['username']}/{category.lower()}/")
 
         # Extract file information
         files_info = []
@@ -202,9 +230,12 @@ async def get_files_by_category(category: str = Path(..., title="Category")):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/files/{category}/{label}")
-async def get_files_by_category_and_label(category: str = Path(..., title="Category"), label: str = Path(..., title="Label")):
+async def get_files_by_category_and_label(user: user_dependency, category: str = Path(..., title="Category"), label: str = Path(..., title="Label")):
     try:
         # Check if the specified category is allowed
+        if user is None:
+            raise HTTPException(status_code=401, detail='Authentication Failed')
+        
         if category.lower() not in ML_CATEGORIES:
             raise HTTPException(status_code=400, detail="Invalid category")
         
@@ -213,7 +244,7 @@ async def get_files_by_category_and_label(category: str = Path(..., title="Categ
             raise HTTPException(status_code=400, detail="Invalid label")        
 
         # List files in the specified category from the cloud storage bucket
-        blobs = client.bucket(bucket_name).list_blobs(prefix=f"{category.lower()}/{label}")
+        blobs = client.bucket(bucket_name).list_blobs(prefix=f"{user['username']}/{category.lower()}/{label}")
 
         # Extract file information
         files_info = []
@@ -231,14 +262,17 @@ async def get_files_by_category_and_label(category: str = Path(..., title="Categ
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/getfiles/{category}/{filename}")
-async def get_file_content(category: str = Path(..., title="Category"), filename: str = Path(..., title="Filename")):
+async def get_file_content(user: user_dependency, category: str = Path(..., title="Category"), filename: str = Path(..., title="Filename")):
     try:
+        if user is None:
+            raise HTTPException(status_code=401, detail='Authentication Failed')
+        
         # Check if the specified category is allowed
         if category.lower() not in ALLOWED_CATEGORIES:
             raise HTTPException(status_code=400, detail="Invalid category")
 
         # Check if the file exists in the specified category
-        blob_name = f"{category}/{filename}"
+        blob_name = f"{user['username']}/{category}/{filename}"
         blob = client.bucket(bucket_name).blob(blob_name)
         if not blob.exists():
             raise HTTPException(status_code=404, detail="File not found")
@@ -252,8 +286,10 @@ async def get_file_content(category: str = Path(..., title="Category"), filename
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/getfiles/{category}/{label}/{filename}")
-async def get_file_content(category: str = Path(..., title="Category"), label: str = Path(..., title="Label"), filename: str = Path(..., title="Filename")):
+async def get_file_content(user: user_dependency, category: str = Path(..., title="Category"), label: str = Path(..., title="Label"), filename: str = Path(..., title="Filename")):
     try:
+        if user is None:
+            raise HTTPException(status_code=401, detail='Authentication Failed')
         # Check if the specified category is allowed
         if category.lower() not in ML_CATEGORIES:
             raise HTTPException(status_code=400, detail="Invalid category")
@@ -263,7 +299,7 @@ async def get_file_content(category: str = Path(..., title="Category"), label: s
             raise HTTPException(status_code=400, detail="Invalid label")
 
         # Check if the file exists in the specified label within the "picture" category
-        blob_name = f"{category}/{label}/{filename}"
+        blob_name = f"{user['username']}/{category}/{label}/{filename}"
         blob = client.bucket(bucket_name).blob(blob_name)
         if not blob.exists():
             raise HTTPException(status_code=404, detail="File not found")

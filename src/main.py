@@ -14,12 +14,11 @@ from tensorflow.keras.utils import img_to_array
 from tensorflow.keras.applications.mobilenet_v2 import preprocess_input
 
 # Documents Model
-import textract
 from tensorflow.keras.preprocessing.text import Tokenizer
 from tensorflow.keras.preprocessing.text import tokenizer_from_json
 from tensorflow.keras.preprocessing.sequence import pad_sequences
-import tempfile
 import docx2txt
+import PyPDF2
 
 # Database Stuff
 from .database import SessionLocal, engine
@@ -90,13 +89,24 @@ def prepare_data_for_prediction(img_content):
     img_array = preprocess_input(np.copy(img_array))
     return img_array
 
-def predict_document(file_content):
+def predict_document(file_content, filename):
     # Create a BytesIO object with the file content
     file_bytes_io = io.BytesIO(file_content)
 
     # Process the document using docx2txt
     try:
-        text = docx2txt.process(file_bytes_io)
+        if filename.endswith(".docx"):
+            text = docx2txt.process(file_bytes_io)
+        
+        if filename.endswith(".pdf"):
+            pdf_reader = PyPDF2.PdfReader(io.BytesIO(file_content))
+            text = ""
+            for page_num in range(len(pdf_reader.pages)):
+                text += pdf_reader.pages[page_num].extract_text()
+        
+        if filename.endswith(".txt"):
+            text = file_content.decode("utf-8")
+                                
         words = text.split()[:50]
 
         # Tokenize and pad the input text
@@ -224,7 +234,7 @@ async def upload(user: user_dependency, files: list[UploadFile] = File(...), db:
             
         if category == 'document':
             file_content = await file.read()
-            label = predict_document(file_content)
+            label = predict_document(file_content, file.filename)
 
         # Upload the file to GCS
         upload_result = upload_file_to_gcs(file, category, label, user['username'])
@@ -243,7 +253,7 @@ async def upload(user: user_dependency, files: list[UploadFile] = File(...), db:
 ALLOWED_CATEGORIES = {"music", "video", "others"}
 ML_CATEGORIES = {"picture", "document"}
 
-ALLOWED_LABELS = ['Collage', 'Food', 'Friends', 'Memes', 'Pets', 'Selfie', 'Personal', 'Work or School']
+ALLOWED_LABELS = ['Collage', 'Food', 'Friends', 'Memes', 'Pets', 'Selfie', 'Personal', 'School']
 
 @app.get("/files/{category}")
 async def get_files_by_category(user: user_dependency, category: str = Path(..., title="Category")):

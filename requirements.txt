@@ -6,6 +6,7 @@ cachetools==5.3.2
 certifi==2023.11.17
 charset-normalizer==3.3.2
 click==8.1.7
+docx2txt==0.8
 ecdsa==0.18.0
 exceptiongroup==1.2.0
 fastapi==0.105.0
@@ -41,6 +42,7 @@ pyasn1-modules==0.3.0
 pydantic==2.5.2
 pydantic_core==2.14.5
 PyMySQL==1.1.0
+PyPDF2==3.0.1
 python-dotenv==1.0.0
 python-jose==3.3.0
 python-multipart==0.0.6

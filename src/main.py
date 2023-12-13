@@ -13,6 +13,14 @@ import numpy as np
 from tensorflow.keras.utils import img_to_array
 from tensorflow.keras.applications.mobilenet_v2 import preprocess_input
 
+# Documents Model
+import textract
+from tensorflow.keras.preprocessing.text import Tokenizer
+from tensorflow.keras.preprocessing.text import tokenizer_from_json
+from tensorflow.keras.preprocessing.sequence import pad_sequences
+import tempfile
+import docx2txt
+
 # Database Stuff
 from .database import SessionLocal, engine
 from . import models
@@ -61,6 +69,12 @@ class HubLayer(tf.keras.layers.Layer):
 
 # Replace 'path/to/your/model.h5' with the actual path to your HDF5 model file
 model_path = 'model_artifacts/modeltype1.h5'
+document_model = tf.keras.models.load_model("model_artifacts/modeltype1documents.h5")
+
+with open("model_artifacts/tokenizer.json", "r") as json_file:
+    loaded_tokenizer_json = json_file.read()
+
+tokenizer = tokenizer_from_json(loaded_tokenizer_json)
 
 # Define a custom object scope to tell TensorFlow about the custom layer
 custom_objects = {'HubLayer': HubLayer}
@@ -75,6 +89,35 @@ def prepare_data_for_prediction(img_content):
     img_array = np.expand_dims(img_array, axis=0)
     img_array = preprocess_input(np.copy(img_array))
     return img_array
+
+def predict_document(file_content):
+    # Create a BytesIO object with the file content
+    file_bytes_io = io.BytesIO(file_content)
+
+    # Process the document using docx2txt
+    try:
+        text = docx2txt.process(file_bytes_io)
+        words = text.split()[:50]
+
+        # Tokenize and pad the input text
+        sequences = tokenizer.texts_to_sequences([" ".join(words)])
+        padded_sequence = pad_sequences(sequences, maxlen=50)  # Assuming the same maxlen used during training
+
+        # Make predictions
+        predictions = document_model.predict(padded_sequence)
+
+        # Assuming binary classification (sigmoid activation function in the output layer)
+        # If it's multiclass, you might need to adjust this part
+        threshold = 0.5
+        binary_predictions = (predictions > threshold).astype(int)
+        if binary_predictions == 1:
+            return 'School'
+        else:
+            return 'Personal'
+    except Exception as e:
+        # Handle exceptions or log the error
+        print(f"Error processing document: {e}")
+        return 'Error'
 
 # Load environment variables from .env file
 load_dotenv()
@@ -178,6 +221,10 @@ async def upload(user: user_dependency, files: list[UploadFile] = File(...), db:
             prepare_image = prepare_data_for_prediction(img_content)
             prediction = model.predict(prepare_image)
             label = str(label_array[np.argmax(prediction)])
+            
+        if category == 'document':
+            file_content = await file.read()
+            label = predict_document(file_content)
 
         # Upload the file to GCS
         upload_result = upload_file_to_gcs(file, category, label, user['username'])

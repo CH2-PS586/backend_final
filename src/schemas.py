@@ -34,9 +34,16 @@ class CreateUserRequest(BaseModel):
     email: str
     password: str
 
-class Token(BaseModel):
+class TokenResult(BaseModel):
+    username: str
     access_token: str
     token_type: str
+    isLogin: bool
+
+class Token(BaseModel):
+    result: TokenResult
+    error: bool
+    massage: str
 
 class TokenData(BaseModel):
 	username : str or None=None
